@@ -501,7 +501,10 @@ class SocketClient(threading.Thread, CastStatusListener):
             # we will automatically connect to it to receive updates
             for namespace in self.app_namespaces:
                 if namespace in self._handlers:
-                    self._ensure_channel_connected(self.destination_id)
+                    if status.app_id not in ["30A4B500", "458D5084"]:
+                        self._ensure_channel_connected(self.destination_id, conn_type=2)
+                    else:
+                        self._ensure_channel_connected(self.destination_id)
                     for handler in set(self._handlers[namespace]):
                         handler.channel_connected()
 
@@ -547,6 +550,14 @@ class SocketClient(threading.Thread, CastStatusListener):
             try:
                 if self._run_once() == 1:
                     break
+            except PyChromecastStopped:
+                self._force_recon = True
+                self.logger.error(
+                    "[%s(%s):%s] Stopped while running, disconnecting.",
+                    self.fn or "",
+                    self.host,
+                    self.port,
+                )
             except Exception:  # pylint: disable=broad-except
                 self._force_recon = True
                 self.logger.exception(
@@ -566,6 +577,7 @@ class SocketClient(threading.Thread, CastStatusListener):
 
         try:
             if not self._check_connection():
+                time.sleep(RETRY_TIME)
                 return 0
         except ChromecastConnectionError:
             return 1
@@ -676,6 +688,16 @@ class SocketClient(threading.Thread, CastStatusListener):
                 self.port,
             )
             reset = True
+
+        elif self._force_recon:
+            # self.logger.warning(
+            #     "[%s(%s):%s] Error communicating with socket, resetting connection",
+            #     self.fn or "",
+            #     self.host,
+            #     self.port,
+            # )
+            # reset = True
+            return False
 
         if reset:
             self.receiver_controller.disconnected()
@@ -820,6 +842,7 @@ class SocketClient(threading.Thread, CastStatusListener):
                     raise socket.error("socket connection broken")
                 chunks.append(chunk)
                 bytes_recd += len(chunk)
+
             except TimeoutError:
                 self.logger.debug(
                     "[%s(%s):%s] timeout in : _read_bytes_from_socket",
@@ -988,8 +1011,12 @@ class SocketClient(threading.Thread, CastStatusListener):
         changes. Listeners will be called with
         listener.new_connection_status(status)"""
         self._connection_listeners.append(listener)
+        
+    def unregister_connection_listener(self, listener: ConnectionStatusListener) -> None:
+        """Unregister a connection listener."""
+        self._connection_listeners.remove(listener)
 
-    def _ensure_channel_connected(self, destination_id: str) -> None:
+    def _ensure_channel_connected(self, destination_id: str, conn_type: int = 0) -> None:
         """Ensure we opened a channel to destination_id."""
         if destination_id not in self._open_channels:
             self._open_channels.append(destination_id)
@@ -999,6 +1026,7 @@ class SocketClient(threading.Thread, CastStatusListener):
                 NS_CONNECTION,
                 {
                     MESSAGE_TYPE: TYPE_CONNECT,
+                    "connType": conn_type,
                     "origin": {},
                     "userAgent": "PyChromecast",
                     "senderInfo": {
@@ -1065,7 +1093,8 @@ class ConnectionController(BaseController):
         if self._socket_client.is_stopped:
             return True
 
-        if data[MESSAGE_TYPE] == TYPE_CLOSE:
+        message_type = data.get(MESSAGE_TYPE)
+        if message_type is None or message_type == TYPE_CLOSE:
             # The cast device is asking us to acknowledge closing this channel.
             self._socket_client.disconnect_channel(message.source_id)
 
