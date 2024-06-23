@@ -268,7 +268,12 @@ def get_chromecasts(  # pylint: disable=too-many-locals
         if TYPE_CHECKING:
             assert callback is not None
         try:
-            callback(
+            def run_callback_in_thread(callback, *args, **kwargs):
+                thread = threading.Thread(target=callback, args=args, kwargs=kwargs)
+                thread.start()
+
+            run_callback_in_thread(
+                callback,
                 get_chromecast_from_cast_info(
                     browser.devices[uuid],
                     zconf=zconf,
@@ -348,11 +353,15 @@ class Chromecast(CastStatusListener):
         self.register_handler = self.socket_client.register_handler
         self.unregister_handler = self.socket_client.unregister_handler
         self.register_status_listener = receiver_controller.register_status_listener
+        self.unregister_status_listener = receiver_controller.unregister_status_listener
         self.register_launch_error_listener = (
             receiver_controller.register_launch_error_listener
         )
         self.register_connection_listener = (
             self.socket_client.register_connection_listener
+        )
+        self.unregister_connection_listener = (
+            self.socket_client.unregister_connection_listener
         )
 
     @property

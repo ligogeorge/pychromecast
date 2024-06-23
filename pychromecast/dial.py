@@ -26,7 +26,8 @@ FORMAT_BASE_URL_HTTP = "http://{}:8008"
 FORMAT_BASE_URL_HTTPS = "https://{}:8443"
 
 _LOGGER = logging.getLogger(__name__)
-
+import asyncio
+from zeroconf.asyncio import AsyncServiceInfo
 
 def get_host_from_service(
     service: HostServiceInfo | MDNSServiceInfo, zconf: zeroconf.Zeroconf | None
@@ -40,8 +41,40 @@ def get_host_from_service(
     try:
         if not zconf:
             raise ZeroConfInstanceRequired
-        service_info = zconf.get_service_info("_googlecast._tcp.local.", service.name)
-        if service_info:
+
+        # Use async approach with zeroconf's own loop
+        async_service_info = AsyncServiceInfo("_googlecast._tcp.local.", service.name)
+
+        async def get_service_info():
+            return await async_service_info.async_request(zconf, 1000)
+
+        # Use zeroconf's loop directly
+        if hasattr(zconf, 'loop') and zconf.loop is not None:
+            # zeroconf has its own loop, use it
+            try:
+                success = asyncio.run_coroutine_threadsafe(get_service_info(), zconf.loop).result(timeout=1.0)
+            except asyncio.TimeoutError:
+                _LOGGER.debug(
+                    "get_info_from_service timed out while resolving service %s",
+                    service,
+                )
+                success = False
+        else:
+            # Fallback to creating new loop if zeroconf doesn't have one
+            success = asyncio.run(get_service_info())
+
+        if success:
+            # Convert AsyncServiceInfo to regular ServiceInfo format
+            service_info = zeroconf.ServiceInfo(
+                type_=async_service_info.type,
+                name=async_service_info.name,
+                addresses=async_service_info.addresses,
+                port=async_service_info.port,
+                properties=async_service_info.properties,
+                server=async_service_info.server,
+                priority=async_service_info.priority,
+                weight=async_service_info.weight
+            )
             _LOGGER.debug(
                 "get_info_from_service resolved service %s to service_info %s",
                 service,
@@ -56,6 +89,9 @@ def get_host_from_service(
         # We do not catch zeroconf.NotRunningException as it's
         # an unrecoverable error.
         _LOGGER.debug("get_info_from_service raised:", exc_info=True)
+    except Exception as e:
+        _LOGGER.debug("get_info_from_service unexpected error: %s", e, exc_info=True)
+
     return _get_host_from_zc_service_info(service_info) + (service_info,)
 
 
@@ -144,6 +180,22 @@ def get_cast_type(
     """Add cast type and manufacturer to a CastInfo instance."""
     cast_type = CAST_TYPE_CHROMECAST
     manufacturer = "Unknown manufacturer"
+
+    # Check for specific model_name
+    if cast_info.model_name == "Google TV Streamer":
+        cast_type = CAST_TYPE_CHROMECAST
+        manufacturer = "Google Inc."
+        return CastInfo(
+            cast_info.services,
+            cast_info.uuid,
+            cast_info.model_name,
+            cast_info.friendly_name,
+            cast_info.host,
+            cast_info.port,
+            cast_type,
+            manufacturer,
+        )
+
     if cast_info.port != 8009:
         cast_type = CAST_TYPE_GROUP
         manufacturer = "Google Inc."

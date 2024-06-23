@@ -23,6 +23,9 @@ from dataclasses import dataclass
 from struct import pack, unpack
 
 import zeroconf
+import asyncio
+from zeroconf.asyncio import AsyncServiceInfo
+from zeroconf._exceptions import NotRunningException
 
 from .config import APP_AUDIBLE
 from .const import MESSAGE_TYPE, PLATFORM_DESTINATION_ID, REQUEST_ID, SESSION_ID
@@ -278,6 +281,16 @@ class SocketClient(threading.Thread, CastStatusListener):
             }
 
             for service in self.services.copy():
+                if not isinstance(service, MDNSServiceInfo):
+                    self.logger.debug(
+                        "[%s(%s):%s] Skipping service %s, not an MDNSServiceInfo",
+                        self.fn or "",
+                        self.host,
+                        self.port,
+                        service,
+                    )
+                    continue
+
                 now = time.time()
                 retry = retries.get(
                     service, {"delay": self.retry_wait, "next_retry": now}
@@ -304,12 +317,21 @@ class SocketClient(threading.Thread, CastStatusListener):
                             None,
                         )
                     )
-                    # Resolve the service name.
+                    # **Run async function in running event loop**
                     host = None
                     port = None
-                    host, port, service_info = get_host_from_service(
-                        service, self.zconf
+                    service_info = AsyncServiceInfo(service.type, service.name)
+                    loop = asyncio.get_event_loop()
+                    future = asyncio.run_coroutine_threadsafe(
+                        service_info.async_request(self.zconf, timeout=5.0), loop
                     )
+                    future.result()  # Wait for completion (blocking but safe)
+
+                    if service_info and service_info.addresses:
+                        host = socket.inet_ntoa(service_info.addresses[0])
+                        port = service_info.port
+                        self.fn = service_info.properties.get(b"fn", b"").decode("utf-8")
+
                     if host and port:
                         if service_info:
                             try:
@@ -357,12 +379,16 @@ class SocketClient(threading.Thread, CastStatusListener):
                         self.port,
                     )
                     self.socket.connect((self.host, self.port))
+
+                    # Setup SSL
                     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
                     context.check_hostname = False
                     context.verify_mode = ssl.CERT_NONE
                     self.socket = context.wrap_socket(self.socket)
+
                     self.connecting = False
                     self._force_recon = False
+
                     self._report_connection_status(
                         ConnectionStatus(
                             CONNECTION_STATUS_CONNECTED,
@@ -370,6 +396,7 @@ class SocketClient(threading.Thread, CastStatusListener):
                             None,
                         )
                     )
+
                     self.receiver_controller.update_status()
                     self.heartbeat_controller.ping()
                     self.heartbeat_controller.reset()
@@ -394,7 +421,7 @@ class SocketClient(threading.Thread, CastStatusListener):
                 # OSError raised if connecting to the socket fails, NotConnected raised
                 # if another thread tries - and fails - to send a message before the
                 # calls to receiver_controller and heartbeat_controller.
-                except (OSError, NotConnected) as err:
+                except (OSError, NotConnected, NotRunningException) as err:
                     self.connecting = True
                     if self.stop.is_set():
                         self.logger.error(
@@ -413,6 +440,7 @@ class SocketClient(threading.Thread, CastStatusListener):
                             None,
                         )
                     )
+
                     retry_log_fun(
                         "[%s(%s):%s] Failed to connect to service %s, retrying in %.1fs",
                         self.fn or "",
@@ -501,7 +529,10 @@ class SocketClient(threading.Thread, CastStatusListener):
             # we will automatically connect to it to receive updates
             for namespace in self.app_namespaces:
                 if namespace in self._handlers:
-                    self._ensure_channel_connected(self.destination_id)
+                    if status.app_id not in ["30A4B500", "458D5084"]:
+                        self._ensure_channel_connected(self.destination_id, conn_type=2)
+                    else:
+                        self._ensure_channel_connected(self.destination_id)
                     for handler in set(self._handlers[namespace]):
                         handler.channel_connected()
 
@@ -547,6 +578,14 @@ class SocketClient(threading.Thread, CastStatusListener):
             try:
                 if self._run_once() == 1:
                     break
+            except PyChromecastStopped:
+                self._force_recon = True
+                self.logger.error(
+                    "[%s(%s):%s] Stopped while running, disconnecting.",
+                    self.fn or "",
+                    self.host,
+                    self.port,
+                )
             except Exception:  # pylint: disable=broad-except
                 self._force_recon = True
                 self.logger.exception(
@@ -566,6 +605,7 @@ class SocketClient(threading.Thread, CastStatusListener):
 
         try:
             if not self._check_connection():
+                time.sleep(RETRY_TIME)
                 return 0
         except ChromecastConnectionError:
             return 1
@@ -676,6 +716,16 @@ class SocketClient(threading.Thread, CastStatusListener):
                 self.port,
             )
             reset = True
+
+        elif self._force_recon:
+            # self.logger.warning(
+            #     "[%s(%s):%s] Error communicating with socket, resetting connection",
+            #     self.fn or "",
+            #     self.host,
+            #     self.port,
+            # )
+            # reset = True
+            return False
 
         if reset:
             self.receiver_controller.disconnected()
@@ -820,6 +870,7 @@ class SocketClient(threading.Thread, CastStatusListener):
                     raise socket.error("socket connection broken")
                 chunks.append(chunk)
                 bytes_recd += len(chunk)
+
             except TimeoutError:
                 self.logger.debug(
                     "[%s(%s):%s] timeout in : _read_bytes_from_socket",
@@ -989,7 +1040,11 @@ class SocketClient(threading.Thread, CastStatusListener):
         listener.new_connection_status(status)"""
         self._connection_listeners.append(listener)
 
-    def _ensure_channel_connected(self, destination_id: str) -> None:
+    def unregister_connection_listener(self, listener: ConnectionStatusListener) -> None:
+        """Unregister a connection listener."""
+        self._connection_listeners.remove(listener)
+
+    def _ensure_channel_connected(self, destination_id: str, conn_type: int = 0) -> None:
         """Ensure we opened a channel to destination_id."""
         if destination_id not in self._open_channels:
             self._open_channels.append(destination_id)
@@ -999,6 +1054,7 @@ class SocketClient(threading.Thread, CastStatusListener):
                 NS_CONNECTION,
                 {
                     MESSAGE_TYPE: TYPE_CONNECT,
+                    "connType": conn_type,
                     "origin": {},
                     "userAgent": "PyChromecast",
                     "senderInfo": {
@@ -1065,7 +1121,8 @@ class ConnectionController(BaseController):
         if self._socket_client.is_stopped:
             return True
 
-        if data[MESSAGE_TYPE] == TYPE_CLOSE:
+        message_type = data.get(MESSAGE_TYPE)
+        if message_type is None or message_type == TYPE_CLOSE:
             # The cast device is asking us to acknowledge closing this channel.
             self._socket_client.disconnect_channel(message.source_id)
 

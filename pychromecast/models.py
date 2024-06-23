@@ -43,3 +43,4 @@ class MDNSServiceInfo:
     """Service info container."""
 
     name: str
+    type: str
