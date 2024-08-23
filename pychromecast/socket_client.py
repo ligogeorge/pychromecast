@@ -620,21 +620,12 @@ class SocketClient(threading.Thread, CastStatusListener):
                         return 1
                 raise
             except socket.error as exc:
-                self._force_recon = True
-                error_message = exc.strerror if hasattr(exc, 'strerror') and exc.strerror else str(exc)
-                error_code = exc.errno if hasattr(exc, 'errno') and exc.errno is not None else 'Unknown'
-                filename = exc.filename if hasattr(exc, 'filename') and exc.filename is not None else 'Unknown'
-                filename2 = exc.filename2 if hasattr(exc, 'filename2') and exc.filename2 is not None else 'Unknown'
                 self.logger.error(
-                    "[%s(%s):%s] Error reading from socket: %s, errno: %s, exception type: %s, filename: %s, filename2: %s",
+                    "[%s(%s):%s] Error reading from socket: %s",
                     self.fn or "",
                     self.host,
                     self.port,
-                    error_message,
-                    error_code,
-                    type(exc).__name__,
-                    filename,
-                    filename2
+                    exc,
                 )
             else:
                 data = _dict_from_message_payload(message)
