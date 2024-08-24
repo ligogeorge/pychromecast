@@ -570,6 +570,7 @@ class SocketClient(threading.Thread, CastStatusListener):
 
         try:
             if not self._check_connection():
+                time.sleep(RETRY_TIME)
                 return 0
         except ChromecastConnectionError:
             return 1
@@ -620,6 +621,7 @@ class SocketClient(threading.Thread, CastStatusListener):
                         return 1
                 raise
             except socket.error as exc:
+                self._force_recon = True
                 self.logger.error(
                     "[%s(%s):%s] Error reading from socket: %s",
                     self.fn or "",
@@ -659,16 +661,8 @@ class SocketClient(threading.Thread, CastStatusListener):
         """
         # check if connection is expired
         reset = False
-        if self._force_recon:
-            self.logger.warning(
-                "[%s(%s):%s] Error communicating with socket, resetting connection",
-                self.fn or "",
-                self.host,
-                self.port,
-            )
-            reset = True
 
-        elif self.heartbeat_controller.is_expired():
+        if self.heartbeat_controller.is_expired():
             self.logger.warning(
                 "[%s(%s):%s] Heartbeat timeout, resetting connection",
                 self.fn or "",
@@ -676,6 +670,16 @@ class SocketClient(threading.Thread, CastStatusListener):
                 self.port,
             )
             reset = True
+
+        elif self._force_recon:
+            # self.logger.warning(
+            #     "[%s(%s):%s] Error communicating with socket, resetting connection",
+            #     self.fn or "",
+            #     self.host,
+            #     self.port,
+            # )
+            # reset = True
+            return False
 
         if reset:
             self.receiver_controller.disconnected()
@@ -1065,8 +1069,6 @@ class ConnectionController(BaseController):
             return True
 
         message_type = data.get(MESSAGE_TYPE)
-        if message_type is None:
-            self._socket_client.logger.error("LIGO Missing message type in %s", data)
         if message_type is None or message_type == TYPE_CLOSE:
             # The cast device is asking us to acknowledge closing this channel.
             self._socket_client.disconnect_channel(message.source_id)
