@@ -124,7 +124,7 @@ class ZeroConfListener(zeroconf.ServiceListener):
         cast_info = None
         device_removed = False
         uuid = None
-        service_info = MDNSServiceInfo(name)
+        service_info = MDNSServiceInfo(name, type_)
         # Lock because the HostBrowser may also add or remove items
         with self._services_lock:
             for uuid, info_for_uuid in self._devices.items():
@@ -230,7 +230,7 @@ class ZeroConfListener(zeroconf.ServiceListener):
             )
             return
 
-        service_info = MDNSServiceInfo(name)
+        service_info = MDNSServiceInfo(name, typ)
 
         with self._services_lock:
             cast_type: str | None
