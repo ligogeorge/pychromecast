@@ -147,12 +147,18 @@ class ZeroConfListener(zeroconf.ServiceListener):
     def update_service(self, zc: zeroconf.Zeroconf, type_: str, name: str) -> None:
         """Called by zeroconf when an mDNS service is updated."""
         _LOGGER.debug("update_service %s, %s", type_, name)
-        self._add_update_service(zc, type_, name, self._cast_listener.update_cast)
+        asyncio.run_coroutine_threadsafe(
+            self._add_update_service(zc, type_, name, self._cast_listener.update_cast),
+            asyncio.get_event_loop()
+        )
 
     def add_service(self, zc: zeroconf.Zeroconf, type_: str, name: str) -> None:
         """Called by zeroconf when an mDNS service is discovered."""
         _LOGGER.debug("add_service %s, %s", type_, name)
-        self._add_update_service(zc, type_, name, self._cast_listener.add_cast)
+        asyncio.run_coroutine_threadsafe(
+            self._add_update_service(zc, type_, name, self._cast_listener.add_cast),
+            asyncio.get_event_loop()
+        )
 
     # pylint: disable-next=too-many-locals
     async def _add_update_service(
