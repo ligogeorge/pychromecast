@@ -13,6 +13,8 @@ import time
 from uuid import UUID
 
 import zeroconf
+import asyncio
+from zeroconf.asyncio import AsyncServiceInfo
 
 from .const import CAST_TYPE_AUDIO, CAST_TYPE_GROUP, CAST_TYPES, MF_GOOGLE
 from .dial import get_device_info, get_multizone_status, get_ssl_context
@@ -153,7 +155,7 @@ class ZeroConfListener(zeroconf.ServiceListener):
         self._add_update_service(zc, type_, name, self._cast_listener.add_cast)
 
     # pylint: disable-next=too-many-locals
-    def _add_update_service(
+    async def _add_update_service(
         self,
         zconf: zeroconf.Zeroconf,
         typ: str,
@@ -161,25 +163,19 @@ class ZeroConfListener(zeroconf.ServiceListener):
         callback: Callable[[UUID, str], None],
     ) -> None:
         """Add or update a service."""
-        service = None
-        tries = 0
         if name.endswith("_sub._googlecast._tcp.local."):
             _LOGGER.debug("_add_update_service ignoring %s, %s", typ, name)
             return
-        while service is None and tries < 4:
-            try:
-                service = zconf.get_service_info(typ, name)
-            except ZEROCONF_ERRORS:
-                # If the zeroconf fails to receive the necessary data we abort
-                # adding the service
-                # We do not catch zeroconf.NotRunningException as it's
-                # an unrecoverable error.
-                _LOGGER.debug(
-                    "get_info_from_service failed to resolve service %s",
-                    service,
-                )
-                break
-            tries += 1
+
+        service = AsyncServiceInfo(typ, name)
+        try:
+            await service.async_request(zconf, timeout=3.0)
+        except ZEROCONF_ERRORS:
+            _LOGGER.debug(
+                "get_info_from_service failed to resolve service %s",
+                service,
+            )
+            return
 
         if not service:
             _LOGGER.debug("_add_update_service failed to add %s, %s", typ, name)
@@ -192,11 +188,7 @@ class ZeroConfListener(zeroconf.ServiceListener):
         def get_value(key: str) -> str | None:
             """Retrieve value and decode to UTF-8."""
             value = service.properties.get(key.encode("utf-8"))
-
-            # zeroconf would keep str version of cached items, this check
-            # can be removed if we pin zeroconf to a version where this is
-            # removed.
-            if value is None or isinstance(value, str):  # type: ignore[unreachable]
+            if value is None or isinstance(value, str):
                 return value
             return value.decode("utf-8")
 
@@ -209,7 +201,6 @@ class ZeroConfListener(zeroconf.ServiceListener):
             )
             return
 
-        # Store the host, in case mDNS stops working
         self._host_browser.add_hosts([host])
 
         friendly_name = get_value("fn")
@@ -222,7 +213,6 @@ class ZeroConfListener(zeroconf.ServiceListener):
             )
             return
 
-        # Ignore incorrect UUIDs from third-party Chromecast emulators
         try:
             uuid = UUID(uuid_str)
         except ValueError:
@@ -236,7 +226,6 @@ class ZeroConfListener(zeroconf.ServiceListener):
 
         service_info = MDNSServiceInfo(name)
 
-        # Lock because the HostBrowser may also add or remove items
         with self._services_lock:
             cast_type: str | None
             manufacturer: str | None
@@ -259,7 +248,6 @@ class ZeroConfListener(zeroconf.ServiceListener):
                     manufacturer,
                 )
             else:
-                # Update stored information
                 services = self._devices[uuid].services
                 services.add(service_info)
                 self._devices[uuid] = CastInfo(
