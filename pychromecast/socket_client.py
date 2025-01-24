@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from struct import pack, unpack
 
 import zeroconf
+import asyncio
+from zeroconf.asyncio import AsyncServiceInfo
 
 from .config import APP_AUDIBLE
 from .const import MESSAGE_TYPE, PLATFORM_DESTINATION_ID, REQUEST_ID, SESSION_ID
@@ -227,10 +229,8 @@ class SocketClient(threading.Thread, CastStatusListener):
         self.register_handler(self.media_controller)
 
         self.receiver_controller.register_status_listener(self)
-
-    def initialize_connection(  # pylint:disable=too-many-statements, too-many-branches
-        self,
-    ) -> None:
+    
+    async def async_initialize_connection(self) -> None:
         """Initialize a socket to a Chromecast, retrying as necessary."""
         tries = self.tries
 
@@ -254,7 +254,6 @@ class SocketClient(threading.Thread, CastStatusListener):
         self.connecting = True
         retry_log_fun = self.logger.error
 
-        # Dict keeping track of individual retry delay for each named service
         retries: dict[HostServiceInfo | MDNSServiceInfo, dict[str, float]] = {}
 
         def mdns_backoff(
@@ -267,10 +266,7 @@ class SocketClient(threading.Thread, CastStatusListener):
             retry["delay"] = min(retry["delay"] * 2, 300)
             retries[service] = retry
 
-        while not self.stop.is_set() and (
-            tries is None or tries > 0
-        ):  # pylint:disable=too-many-nested-blocks
-            # Prune retries dict
+        while not self.stop.is_set() and (tries is None or tries > 0):
             retries = {
                 key: retries[key]
                 for key in self.services.copy()
@@ -286,8 +282,7 @@ class SocketClient(threading.Thread, CastStatusListener):
                     continue
                 try:
                     if self.socket is not None:
-                        # If we retry connecting, we need to clean up the socket again
-                        self.selector.unregister(self.socket)  # type: ignore[unreachable]
+                        self.selector.unregister(self.socket)
                         self.socket.close()
                         self.socket = None
                         self.remote_selector_key = None
@@ -304,19 +299,17 @@ class SocketClient(threading.Thread, CastStatusListener):
                             None,
                         )
                     )
-                    # Resolve the service name.
+
                     host = None
                     port = None
-                    host, port, service_info = get_host_from_service(
-                        service, self.zconf
-                    )
+                    service_info = AsyncServiceInfo(service.type, service.name)
+                    await service_info.async_request(self.zconf, timeout=self.timeout)
+                    if service_info:
+                        host = socket.inet_ntoa(service_info.addresses[0])
+                        port = service_info.port
+                        self.fn = service_info.properties.get(b"fn", b"").decode("utf-8")
+
                     if host and port:
-                        if service_info:
-                            try:
-                                # Mypy does not understand that we catch errors, ignore it
-                                self.fn = service_info.properties[b"fn"].decode("utf-8")  # type: ignore[union-attr]
-                            except (AttributeError, KeyError, UnicodeError):
-                                pass
                         self.logger.debug(
                             "[%s(%s):%s] Resolved service %s to %s:%s",
                             self.fn or "",
@@ -344,8 +337,6 @@ class SocketClient(threading.Thread, CastStatusListener):
                             )
                         )
                         mdns_backoff(service, retry)
-                        # If zeroconf fails to receive the necessary data,
-                        # try next service
                         continue
 
                     self.logger.debug(
@@ -391,9 +382,6 @@ class SocketClient(threading.Thread, CastStatusListener):
                         )
                     return
 
-                # OSError raised if connecting to the socket fails, NotConnected raised
-                # if another thread tries - and fails - to send a message before the
-                # calls to receiver_controller and heartbeat_controller.
                 except (OSError, NotConnected) as err:
                     self.connecting = True
                     if self.stop.is_set():
@@ -424,7 +412,6 @@ class SocketClient(threading.Thread, CastStatusListener):
                     mdns_backoff(service, retry)
                     retry_log_fun = self.logger.debug
 
-            # Only sleep if we have another retry remaining
             if tries is None or tries > 1:
                 self.logger.debug(
                     "[%s(%s):%s] Not connected, sleeping for %.1fs. Services: %s",
@@ -434,7 +421,7 @@ class SocketClient(threading.Thread, CastStatusListener):
                     self.retry_wait,
                     self.services,
                 )
-                time.sleep(self.retry_wait)
+                await asyncio.sleep(self.retry_wait)
 
             if tries:
                 tries -= 1
@@ -447,6 +434,10 @@ class SocketClient(threading.Thread, CastStatusListener):
             self.port,
         )
         raise ChromecastConnectionError("Failed to connect")
+
+    def initialize_connection(self) -> None:
+        """Wrapper to run async_initialize_connection in an event loop."""
+        asyncio.run(self.async_initialize_connection())
 
     def disconnect(self) -> None:
         """Disconnect socket connection to Chromecast device"""
