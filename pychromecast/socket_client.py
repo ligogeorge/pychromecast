@@ -437,7 +437,15 @@ class SocketClient(threading.Thread, CastStatusListener):
 
     def initialize_connection(self) -> None:
         """Wrapper to run async_initialize_connection in an event loop."""
-        asyncio.run(self.async_initialize_connection())
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            asyncio.ensure_future(self.async_initialize_connection())
+        else:
+            asyncio.run(self.async_initialize_connection())
 
     def disconnect(self) -> None:
         """Disconnect socket connection to Chromecast device"""
