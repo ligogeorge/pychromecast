@@ -1,3 +1,4 @@
 casttube==0.2.1
 protobuf==5.29.3
 zeroconf==0.140.1
+gevent==24.11.1

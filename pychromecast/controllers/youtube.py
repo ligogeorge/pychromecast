@@ -4,7 +4,10 @@ Use the media controller to play, pause etc.
 """
 
 import logging
-import threading
+import gevent
+from gevent import monkey
+from gevent.event import Event
+monkey.patch_all()
 from typing import Any, cast
 
 from casttube import YouTubeSession  # type: ignore[import-untyped]
@@ -82,7 +85,7 @@ class YouTubeController(QuickPlayController):
 
     def __init__(self, timeout: float = 10) -> None:
         super().__init__(YOUTUBE_NAMESPACE, APP_YOUTUBE)
-        self.status_update_event = threading.Event()
+        self.status_update_event = Event()
         self._timeout = timeout
         self._session = None
 

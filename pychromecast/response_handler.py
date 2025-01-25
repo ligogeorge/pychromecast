@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import logging
-import threading
+import gevent
+from gevent import monkey
+from gevent.event import Event
+monkey.patch_all()
 from typing import Protocol
 
 from .error import RequestFailed, RequestTimeout
@@ -37,7 +40,7 @@ class WaitResponse:
 
     def __init__(self, timeout: float, request: str) -> None:
         """Initialize."""
-        self._event = threading.Event()
+        self._event = Event()
         self._request = request
         self._timeout = timeout
 

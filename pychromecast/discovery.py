@@ -8,7 +8,11 @@ import functools
 import itertools
 import logging
 import ssl
-import threading
+import gevent
+from gevent import monkey
+from gevent.event import Event
+monkey.patch_all()
+import gevent.lock
 import time
 from uuid import UUID
 
@@ -111,7 +115,7 @@ class ZeroConfListener(zeroconf.ServiceListener):
         cast_listener: AbstractCastListener,
         devices: dict[UUID, CastInfo],
         host_browser: HostBrowser,
-        lock: threading.Lock,
+        lock: gevent.lock.Semaphore,
     ) -> None:
         self._cast_listener = cast_listener
         self._devices = devices
@@ -282,14 +286,14 @@ HOSTLISTENER_CYCLE_TIME = 30
 HOSTLISTENER_MAX_FAIL = 5
 
 
-class HostBrowser(threading.Thread):
+class HostBrowser(gevent.Greenlet):
     """Repeateadly poll a set of known hosts."""
 
     def __init__(
         self,
         cast_listener: AbstractCastListener,
         devices: dict[UUID, CastInfo],
-        lock: threading.Lock,
+        lock: gevent.lock.Semaphore,
     ) -> None:
         super().__init__(daemon=True)
         self._cast_listener = cast_listener
@@ -299,7 +303,7 @@ class HostBrowser(threading.Thread):
         self._services_lock = lock
         self._start_requested = False
         self._context: ssl.SSLContext | None = None
-        self.stop = threading.Event()
+        self.stop = Event()
 
     def add_hosts(self, known_hosts: list[str]) -> None:
         """Add a list of known hosts to the set."""
@@ -582,7 +586,7 @@ class CastBrowser:
         self._zc_browser: zeroconf.ServiceBrowser | None = None
         self.devices: dict[UUID, CastInfo] = {}
         self.services = self.devices  # For backwards compatibility
-        self._services_lock = threading.Lock()
+        self._services_lock = gevent.lock.Semaphore()
         self.host_browser = HostBrowser(
             self._cast_listener, self.devices, self._services_lock
         )
@@ -709,7 +713,7 @@ def discover_chromecasts(
         if max_devices is not None and browser.count >= max_devices:
             discover_complete.set()
 
-    discover_complete = threading.Event()
+    discover_complete = Event()
     zconf = zeroconf_instance or zeroconf.Zeroconf()
     browser = CastBrowser(SimpleCastListener(add_callback), zconf, known_hosts)
     browser.start_discovery()
@@ -759,7 +763,7 @@ def discover_listed_chromecasts(
         if not friendly_names and not uuids:
             discover_complete.set()
 
-    discover_complete = threading.Event()
+    discover_complete = Event()
 
     zconf = zeroconf_instance or zeroconf.Zeroconf()
     browser = CastBrowser(SimpleCastListener(add_callback), zconf, known_hosts)

@@ -16,7 +16,10 @@ import logging
 import selectors
 import socket
 import ssl
-import threading
+import gevent
+from gevent import monkey
+from gevent.event import Event
+monkey.patch_all()
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -136,7 +139,7 @@ class ConnectionStatusListener(abc.ABC):
 
 
 # pylint: disable-next=too-many-instance-attributes
-class SocketClient(threading.Thread, CastStatusListener):
+class SocketClient(gevent.Greenlet, CastStatusListener):
     """
     Class to interact with a Chromecast through a socket.
 
@@ -195,7 +198,7 @@ class SocketClient(threading.Thread, CastStatusListener):
         self.port = 8009
 
         self.source_id = "sender-0"
-        self.stop = threading.Event()
+        self.stop = Event()
         # socketpair used to interrupt the worker thread
         self.socketpair = socket.socketpair()
 

@@ -5,7 +5,10 @@ Controller to interface with Home Assistant
 from collections.abc import Callable
 from functools import partial
 import logging
-import threading
+import gevent
+from gevent import monkey
+from gevent.event import Event
+monkey.patch_all()
 from typing import Any
 
 from ..config import APP_HOMEASSISTANT_LOVELACE
@@ -64,7 +67,7 @@ class HomeAssistantController(BaseController):
         #   urlPath?: string | null;
         # }
         self.status: dict | None = None
-        self._hass_connecting_event = threading.Event()
+        self._hass_connecting_event = Event()
         self._hass_connecting_event.set()
         self._on_connect: list[CallbackType] = []
 

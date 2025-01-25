@@ -7,7 +7,11 @@ Example that shows how the DashCast controller can be used.
 import argparse
 import sys
 import time
-import threading
+import gevent
+from gevent import monkey
+from gevent.event import Event
+monkey.patch_all()
+
 
 import pychromecast
 from pychromecast.controllers import dashcast
@@ -72,7 +76,7 @@ if not cast.is_idle:
 
 time.sleep(1)
 
-requests_handled = threading.Event()
+requests_handled = Event()
 
 
 def _first_request_handled(msg_sent: bool, _response: dict | None) -> None:

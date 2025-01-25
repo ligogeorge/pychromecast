@@ -7,7 +7,10 @@ import abc
 from datetime import datetime
 from dataclasses import dataclass
 import logging
-import threading
+import gevent
+from gevent import monkey
+from gevent.event import Event
+monkey.patch_all()
 from typing import Any
 
 from ..config import APP_MEDIA_RECEIVER
@@ -570,7 +573,7 @@ class MediaController(BaseMediaPlayer):
 
         self.media_session_id = 0
         self.status = MediaStatus()
-        self.session_active_event = threading.Event()
+        self.session_active_event = Event()
         self._status_listeners: list[MediaStatusListener] = []
 
     def channel_connected(self) -> None:

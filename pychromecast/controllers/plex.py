@@ -7,7 +7,10 @@ from __future__ import annotations
 from copy import deepcopy
 from functools import partial
 import json
-import threading
+import gevent
+from gevent import monkey
+from gevent.event import Event
+monkey.patch_all()
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlparse
 
@@ -208,7 +211,7 @@ class PlexController(BaseController):
         self.app_id = "9AC194DC"
         self.namespace = "urn:x-cast:plex"
         self.request_id = 0
-        self.play_media_event = threading.Event()
+        self.play_media_event = Event()
         self._last_play_msg: dict[str, Any] = {}
 
     def _send_cmd(

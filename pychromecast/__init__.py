@@ -7,8 +7,10 @@ from __future__ import annotations
 from collections.abc import Callable
 import logging
 import fnmatch
-from threading import Event
-import threading
+import gevent
+from gevent import monkey
+from gevent.event import Event
+monkey.patch_all()
 from typing import TYPE_CHECKING, Literal, cast, overload
 from uuid import UUID
 
@@ -327,7 +329,7 @@ class Chromecast(CastStatusListener):
         self.cast_info = cast_info
 
         self.status: CastStatus | None = None
-        self.status_event = threading.Event()
+        self.status_event = Event()
 
         self.socket_client = socket_client.SocketClient(
             cast_type=cast_info.cast_type,
