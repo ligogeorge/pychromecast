@@ -14,6 +14,9 @@ from uuid import UUID
 
 import zeroconf
 
+import asyncio
+from zeroconf.asyncio import AsyncServiceInfo
+
 from .const import CAST_TYPE_AUDIO, CAST_TYPE_GROUP, CAST_TYPES, MF_GOOGLE
 from .dial import get_device_info, get_multizone_status, get_ssl_context
 from .models import ZEROCONF_ERRORS, CastInfo, HostServiceInfo, MDNSServiceInfo
@@ -122,7 +125,7 @@ class ZeroConfListener(zeroconf.ServiceListener):
         cast_info = None
         device_removed = False
         uuid = None
-        service_info = MDNSServiceInfo(name)
+        service_info = MDNSServiceInfo(name, type_)
         # Lock because the HostBrowser may also add or remove items
         with self._services_lock:
             for uuid, info_for_uuid in self._devices.items():
@@ -142,18 +145,24 @@ class ZeroConfListener(zeroconf.ServiceListener):
         else:
             self._cast_listener.update_cast(uuid, name)
 
-    def update_service(self, zc: zeroconf.Zeroconf, type_: str, name: str) -> None:
-        """Called by zeroconf when an mDNS service is updated."""
-        _LOGGER.debug("update_service %s, %s", type_, name)
-        self._add_update_service(zc, type_, name, self._cast_listener.update_cast)
-
     def add_service(self, zc: zeroconf.Zeroconf, type_: str, name: str) -> None:
         """Called by zeroconf when an mDNS service is discovered."""
         _LOGGER.debug("add_service %s, %s", type_, name)
-        self._add_update_service(zc, type_, name, self._cast_listener.add_cast)
+        asyncio.run_coroutine_threadsafe(
+            self._add_update_service(zc, type_, name, self._cast_listener.add_cast),
+            asyncio.get_event_loop()
+        )
+
+    def update_service(self, zc: zeroconf.Zeroconf, type_: str, name: str) -> None:
+        """Called by zeroconf when an mDNS service is updated."""
+        _LOGGER.debug("update_service %s, %s", type_, name)
+        asyncio.run_coroutine_threadsafe(
+            self._add_update_service(zc, type_, name, self._cast_listener.update_cast),
+            asyncio.get_event_loop()
+        )
 
     # pylint: disable-next=too-many-locals
-    def _add_update_service(
+    async def _add_update_service(
         self,
         zconf: zeroconf.Zeroconf,
         typ: str,
@@ -168,7 +177,9 @@ class ZeroConfListener(zeroconf.ServiceListener):
             return
         while service is None and tries < 4:
             try:
-                service = zconf.get_service_info(typ, name)
+                async_service_info = AsyncServiceInfo(typ, name)
+                await async_service_info.async_request(zconf, timeout=1.0)
+                service = async_service_info
             except ZEROCONF_ERRORS:
                 # If the zeroconf fails to receive the necessary data we abort
                 # adding the service
@@ -234,9 +245,8 @@ class ZeroConfListener(zeroconf.ServiceListener):
             )
             return
 
-        service_info = MDNSServiceInfo(name)
+        service_info = MDNSServiceInfo(name, typ)
 
-        # Lock because the HostBrowser may also add or remove items
         with self._services_lock:
             cast_type: str | None
             manufacturer: str | None
@@ -259,7 +269,6 @@ class ZeroConfListener(zeroconf.ServiceListener):
                     manufacturer,
                 )
             else:
-                # Update stored information
                 services = self._devices[uuid].services
                 services.add(service_info)
                 self._devices[uuid] = CastInfo(

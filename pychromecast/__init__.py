@@ -268,7 +268,12 @@ def get_chromecasts(  # pylint: disable=too-many-locals
         if TYPE_CHECKING:
             assert callback is not None
         try:
-            callback(
+            def run_callback_in_thread(callback, *args, **kwargs):
+                thread = threading.Thread(target=callback, args=args, kwargs=kwargs)
+                thread.start()
+
+            run_callback_in_thread(
+                callback,
                 get_chromecast_from_cast_info(
                     browser.devices[uuid],
                     zconf=zconf,
