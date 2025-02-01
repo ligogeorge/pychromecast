@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from struct import pack, unpack
 
 import zeroconf
+import asyncio
+from zeroconf.asyncio import AsyncServiceInfo
 
 from .config import APP_AUDIBLE
 from .const import MESSAGE_TYPE, PLATFORM_DESTINATION_ID, REQUEST_ID, SESSION_ID
@@ -278,6 +280,16 @@ class SocketClient(threading.Thread, CastStatusListener):
             }
 
             for service in self.services.copy():
+                if not isinstance(service, MDNSServiceInfo):
+                    self.logger.debug(
+                        "[%s(%s):%s] Skipping service %s, not an MDNSServiceInfo",
+                        self.fn or "",
+                        self.host,
+                        self.port,
+                        service,
+                    )
+                    continue
+
                 now = time.time()
                 retry = retries.get(
                     service, {"delay": self.retry_wait, "next_retry": now}
@@ -304,12 +316,21 @@ class SocketClient(threading.Thread, CastStatusListener):
                             None,
                         )
                     )
-                    # Resolve the service name.
+                    # **Run async function in running event loop**
                     host = None
                     port = None
-                    host, port, service_info = get_host_from_service(
-                        service, self.zconf
+                    service_info = AsyncServiceInfo(service.type, service.name)
+                    loop = asyncio.get_event_loop()
+                    future = asyncio.run_coroutine_threadsafe(
+                        service_info.async_request(self.zconf, timeout=5.0), loop
                     )
+                    future.result()  # Wait for completion (blocking but safe)
+
+                    if service_info and service_info.addresses:
+                        host = socket.inet_ntoa(service_info.addresses[0])
+                        port = service_info.port
+                        self.fn = service_info.properties.get(b"fn", b"").decode("utf-8")
+
                     if host and port:
                         if service_info:
                             try:
@@ -357,12 +378,16 @@ class SocketClient(threading.Thread, CastStatusListener):
                         self.port,
                     )
                     self.socket.connect((self.host, self.port))
+
+                    # Setup SSL
                     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
                     context.check_hostname = False
                     context.verify_mode = ssl.CERT_NONE
                     self.socket = context.wrap_socket(self.socket)
+
                     self.connecting = False
                     self._force_recon = False
+
                     self._report_connection_status(
                         ConnectionStatus(
                             CONNECTION_STATUS_CONNECTED,
@@ -370,6 +395,7 @@ class SocketClient(threading.Thread, CastStatusListener):
                             None,
                         )
                     )
+
                     self.receiver_controller.update_status()
                     self.heartbeat_controller.ping()
                     self.heartbeat_controller.reset()
@@ -413,6 +439,7 @@ class SocketClient(threading.Thread, CastStatusListener):
                             None,
                         )
                     )
+
                     retry_log_fun(
                         "[%s(%s):%s] Failed to connect to service %s, retrying in %.1fs",
                         self.fn or "",
@@ -1011,7 +1038,7 @@ class SocketClient(threading.Thread, CastStatusListener):
         changes. Listeners will be called with
         listener.new_connection_status(status)"""
         self._connection_listeners.append(listener)
-        
+
     def unregister_connection_listener(self, listener: ConnectionStatusListener) -> None:
         """Unregister a connection listener."""
         self._connection_listeners.remove(listener)
