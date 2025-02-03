@@ -25,6 +25,7 @@ from struct import pack, unpack
 import zeroconf
 import asyncio
 from zeroconf.asyncio import AsyncServiceInfo
+from zeroconf._exceptions import NotRunningException
 
 from .config import APP_AUDIBLE
 from .const import MESSAGE_TYPE, PLATFORM_DESTINATION_ID, REQUEST_ID, SESSION_ID
@@ -420,7 +421,7 @@ class SocketClient(threading.Thread, CastStatusListener):
                 # OSError raised if connecting to the socket fails, NotConnected raised
                 # if another thread tries - and fails - to send a message before the
                 # calls to receiver_controller and heartbeat_controller.
-                except (OSError, NotConnected) as err:
+                except (OSError, NotConnected, NotRunningException) as err:
                     self.connecting = True
                     if self.stop.is_set():
                         self.logger.error(
