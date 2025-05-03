@@ -145,6 +145,22 @@ def get_cast_type(
     """Add cast type and manufacturer to a CastInfo instance."""
     cast_type = CAST_TYPE_CHROMECAST
     manufacturer = "Unknown manufacturer"
+
+    # Check for specific model_name
+    if cast_info.model_name == "Google TV Streamer":
+        cast_type = CAST_TYPE_CHROMECAST
+        manufacturer = "Google Inc."
+        return CastInfo(
+            cast_info.services,
+            cast_info.uuid,
+            cast_info.model_name,
+            cast_info.friendly_name,
+            cast_info.host,
+            cast_info.port,
+            cast_type,
+            manufacturer,
+        )
+
     if cast_info.port != 8009:
         cast_type = CAST_TYPE_GROUP
         manufacturer = "Google Inc."
