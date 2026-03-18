@@ -268,6 +268,7 @@ class ZeroConfListener(zeroconf.ServiceListener):
                     cast_type,
                     manufacturer,
                 )
+                callback(uuid, name)
             else:
                 services = self._devices[uuid].services
                 services.add(service_info)
@@ -281,8 +282,7 @@ class ZeroConfListener(zeroconf.ServiceListener):
                     cast_type,
                     manufacturer,
                 )
-
-        callback(uuid, name)
+                self._cast_listener.update_cast(uuid, name)
 
 
 class HostStatus:
