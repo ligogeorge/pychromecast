@@ -189,6 +189,7 @@ class SocketClient(threading.Thread, CastStatusListener):
         self.tries = tries
         self.timeout = timeout or TIMEOUT_TIME
         self.retry_wait = retry_wait or RETRY_TIME
+        self.retries: dict[HostServiceInfo | MDNSServiceInfo, dict[str, float]] = {}
         self.services = services
         self.zconf = zconf
 
@@ -257,9 +258,6 @@ class SocketClient(threading.Thread, CastStatusListener):
         self.connecting = True
         retry_log_fun = self.logger.error
 
-        # Dict keeping track of individual retry delay for each named service
-        retries: dict[HostServiceInfo | MDNSServiceInfo, dict[str, float]] = {}
-
         def mdns_backoff(
             service: HostServiceInfo | MDNSServiceInfo,
             retry: dict[str, float],
@@ -268,16 +266,16 @@ class SocketClient(threading.Thread, CastStatusListener):
             now = time.time()
             retry["next_retry"] = now + retry["delay"]
             retry["delay"] = min(retry["delay"] * 2, 300)
-            retries[service] = retry
+            self.retries[service] = retry
 
         while not self.stop.is_set() and (
             tries is None or tries > 0
         ):  # pylint:disable=too-many-nested-blocks
             # Prune retries dict
-            retries = {
-                key: retries[key]
+            self.retries = {
+                key: self.retries[key]
                 for key in self.services.copy()
-                if (key is not None and key in retries)
+                if (key is not None and key in self.retries)
             }
 
             for service in self.services.copy():
@@ -292,7 +290,7 @@ class SocketClient(threading.Thread, CastStatusListener):
                     continue
 
                 now = time.time()
-                retry = retries.get(
+                retry = self.retries.get(
                     service, {"delay": self.retry_wait, "next_retry": now}
                 )
                 if now < retry["next_retry"]:
@@ -462,7 +460,7 @@ class SocketClient(threading.Thread, CastStatusListener):
                     self.retry_wait,
                     self.services,
                 )
-                time.sleep(self.retry_wait)
+                self.stop.wait(self.retry_wait)
 
             if tries:
                 tries -= 1
@@ -475,6 +473,16 @@ class SocketClient(threading.Thread, CastStatusListener):
             self.port,
         )
         raise ChromecastConnectionError("Failed to connect")
+
+    def attempt_reconnect(self) -> None:
+        """
+        Skip the current mDNS backoff wait and attempt reconnect immediately.
+        Only affects the next iteration of the connection loop.
+        """
+        now = time.time()
+        for service, retry in getattr(self, "retries", {}).items():
+            # Only skip the current wait
+            retry["next_retry"] = now - 1  # in the past so the loop will attempt it immediately
 
     def disconnect(self) -> None:
         """Disconnect socket connection to Chromecast device"""
